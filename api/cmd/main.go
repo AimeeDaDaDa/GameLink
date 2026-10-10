@@ -171,6 +171,9 @@ func closeSQL(orm *gorm.DB) error {
 
 func startServer(router *gin.Engine, port string, lifecycle *lifecycle.Manager) {
 	addr := fmt.Sprintf(":%s", port)
+	if host := os.Getenv("SERVICE_HOST"); host != "" {
+		addr = fmt.Sprintf("%s:%s", host, port)
+	}
 
 	server := &http.Server{
 		Addr:              addr,

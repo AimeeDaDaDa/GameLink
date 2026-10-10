@@ -161,70 +161,45 @@ func (r *withdrawRepository) List(ctx context.Context, opts WithdrawListOptions)
 
 // GetPlayerBalance 获取陪玩师余额信息
 func (r *withdrawRepository) GetPlayerBalance(ctx context.Context, playerID uint64) (*PlayerBalance, error) {
-	balance := &PlayerBalance{}
-
-	// 计算累计收益（从已完成订单）
-	var totalEarnings int64
-	err := r.db.WithContext(ctx).
-		Model(&model.Order{}).
-		Where("player_id = ? AND status = ?", playerID, model.OrderStatusCompleted).
-		Select("COALESCE(SUM(total_price_cents), 0)").
-		Scan(&totalEarnings).Error
+	b := &PlayerBalance{}
+	var records []struct {
+		Status model.SettlementStatus
+		Income int64
+	}
+	err := r.db.WithContext(ctx).Model(&model.CommissionRecord{}).Joins("JOIN wallet_ledgers l ON l.key = 'commission:' || CAST(commission_records.id AS TEXT)").Where("commission_records.player_id = ? AND commission_records.settlement_status <> ?", playerID, "canceled").Select("commission_records.settlement_status AS status, COALESCE(SUM(player_income_cents),0) AS income").Group("commission_records.settlement_status").Scan(&records).Error
 	if err != nil {
 		return nil, err
 	}
-	balance.TotalEarnings = totalEarnings
-
-	// 计算累计提现（已完成的提现）
-	var withdrawTotal int64
-	err = r.db.WithContext(ctx).
-		Model(&model.Withdraw{}).
-		Where("player_id = ? AND status = ?", playerID, model.WithdrawStatusCompleted).
-		Select("COALESCE(SUM(amount_cents), 0)").
-		Scan(&withdrawTotal).Error
+	for _, v := range records {
+		b.TotalEarnings += v.Income
+		if v.Status == model.SettlementStatusSettled {
+			b.AvailableBalance += v.Income
+		} else {
+			b.PendingBalance += v.Income
+		}
+	}
+	var withdrawals []struct {
+		Status model.WithdrawStatus
+		Amount int64
+	}
+	err = r.db.WithContext(ctx).Model(&model.Withdraw{}).Where("player_id = ? AND status IN ?", playerID, []model.WithdrawStatus{model.WithdrawStatusPending, model.WithdrawStatusApproved, model.WithdrawStatusCompleted}).Select("status,COALESCE(SUM(amount_cents),0) AS amount").Group("status").Scan(&withdrawals).Error
 	if err != nil {
 		return nil, err
 	}
-	balance.WithdrawTotal = withdrawTotal
-
-	// 计算待处理提现（pending approved 状态）
-	var pendingWithdraw int64
-	err = r.db.WithContext(ctx).
-		Model(&model.Withdraw{}).
-		Where("player_id = ? AND status IN ?", playerID, []model.WithdrawStatus{
-			model.WithdrawStatusPending,
-			model.WithdrawStatusApproved,
-		}).
-		Select("COALESCE(SUM(amount_cents), 0)").
-		Scan(&pendingWithdraw).Error
-	if err != nil {
-		return nil, err
+	for _, v := range withdrawals {
+		b.AvailableBalance -= v.Amount
+		if v.Status == model.WithdrawStatusCompleted {
+			b.WithdrawTotal += v.Amount
+		} else {
+			b.PendingWithdraw += v.Amount
+		}
 	}
-	balance.PendingWithdraw = pendingWithdraw
-
-	// 计算待结算余额（进行中的订单）
-	var pendingBalance int64
-	err = r.db.WithContext(ctx).
-		Model(&model.Order{}).
-		Where("player_id = ? AND status = ?", playerID, model.OrderStatusInProgress).
-		Select("COALESCE(SUM(total_price_cents), 0)").
-		Scan(&pendingBalance).Error
-	if err != nil {
-		return nil, err
+	if b.AvailableBalance < 0 {
+		return nil, fmt.Errorf("历史提现与已结算收益不符，需要对账")
 	}
-	balance.PendingBalance = pendingBalance
-
-	// 计算可提现余额 = 累计收益 - 累计提现 - 待处理提现 - 待结算余额
-	balance.AvailableBalance = totalEarnings - withdrawTotal - pendingWithdraw - pendingBalance
-	if balance.AvailableBalance < 0 {
-		balance.AvailableBalance = 0
-	}
-
-	return balance, nil
+	return b, nil
 }
 
-// ListByCompany 按结算公司查询提现列表
-// Requirements: 14.5
 func (r *withdrawRepository) ListByCompany(ctx context.Context, opts WithdrawByCompanyOptions) ([]model.Withdraw, int64, error) {
 	query := r.db.WithContext(ctx).Model(&model.Withdraw{})
 

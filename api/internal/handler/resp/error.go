@@ -54,6 +54,17 @@ func Error(c *gin.Context, err error) {
 	})
 }
 
+// ErrorWithFallback preserves a service's public error while hiding unexpected
+// database/internal errors behind the handler's generic message.
+func ErrorWithFallback(c *gin.Context, err error, fallback string) {
+	var publicError *apierr.APIError
+	if errors.As(err, &publicError) {
+		Error(c, publicError)
+		return
+	}
+	InternalError(c, fallback)
+}
+
 // ErrorMsg sends an error response with status code and message.
 func ErrorMsg(c *gin.Context, status int, msg string) {
 	JSON(c, status, model.APIResponse[any]{

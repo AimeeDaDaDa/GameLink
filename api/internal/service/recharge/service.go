@@ -10,6 +10,7 @@ import (
 	"gamelink/internal/repository"
 	rechargerepo "gamelink/internal/repository/recharge"
 	walletrepo "gamelink/internal/repository/wallet"
+	"gamelink/internal/service/finance"
 )
 
 // RechargeRepository 定义充值仓库接口
@@ -43,6 +44,7 @@ type CouponService interface {
 
 // Service 充值业务逻辑层
 type Service struct {
+	finance    *finance.Service
 	repo       RechargeRepository
 	walletRepo walletrepo.Repository
 	couponSvc  CouponService
@@ -269,6 +271,9 @@ func (s *Service) CreateRechargeOrder(ctx context.Context, userID, optionID uint
 
 // HandlePaymentCallback 处理支付回调
 func (s *Service) HandlePaymentCallback(ctx context.Context, orderNo, providerTradeNo string) error {
+	if s.finance != nil {
+		return finance.ErrGatewayUnavailable
+	}
 	// 获取记录
 	record, err := s.repo.GetRecordByOrderNo(ctx, orderNo)
 	if err != nil {
@@ -343,6 +348,9 @@ func (s *Service) issueCoupons(ctx context.Context, recordID, userID, templateID
 
 // RefundRecord 退款
 func (s *Service) RefundRecord(ctx context.Context, id uint64, reason string) error {
+	if s.finance != nil {
+		return finance.ErrGatewayUnavailable
+	}
 	record, err := s.repo.GetRecordByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("get record: %w", err)
@@ -397,3 +405,6 @@ func (s *Service) CancelExpiredRecords(ctx context.Context) (int64, error) {
 	}
 	return affected, nil
 }
+
+// SetFinance injects the transactional accounting service.
+func (s *Service) SetFinance(f *finance.Service) { s.finance = f }

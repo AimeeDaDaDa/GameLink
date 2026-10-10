@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"gamelink/internal/service/external"
 )
@@ -76,4 +77,15 @@ func (s *Service) getProvider() (Provider, error) {
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedProvider, s.config.SMS.Provider)
 	}
+}
+
+// maskPhone 手机号脱敏：保留前 3 位与后 4 位，中间以星号代替，避免完整手机号进入日志。
+func maskPhone(phone string) string {
+	s := strings.TrimPrefix(phone, "+86")
+	s = strings.TrimPrefix(s, "86")
+	s = strings.TrimSpace(s)
+	if len(s) <= 7 {
+		return "***"
+	}
+	return s[:3] + "****" + s[len(s)-4:]
 }

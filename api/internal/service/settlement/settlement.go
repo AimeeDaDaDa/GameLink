@@ -15,6 +15,7 @@ import (
 	"gamelink/internal/model"
 	"gamelink/internal/repository"
 	commissionrepo "gamelink/internal/repository/commission"
+	"gamelink/internal/service/finance"
 	"gamelink/pkg/apierr"
 )
 
@@ -26,6 +27,7 @@ type WalletRepository interface {
 
 // SettlementService handles T+7 frozen balance unfreezing
 type SettlementService struct {
+	finance     *finance.Service
 	commissions commissionrepo.CommissionRepository
 	wallets     WalletRepository
 	players     repository.PlayerRepository // To get user ID from player ID
@@ -59,6 +61,13 @@ type UnfreezeResult struct {
 //
 // This should be called by a scheduled task (e.g., daily cron job).
 func (s *SettlementService) ProcessT7Unfreeze(ctx context.Context) (*UnfreezeResult, error) {
+	if s.finance != nil {
+		r, err := s.finance.UnfreezeDue(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &UnfreezeResult{ProcessedCount: r.ProcessedCount, SuccessCount: r.SuccessCount, FailedCount: r.FailedCount, TotalUnfrozen: r.TotalUnfrozen, FailedIDs: r.FailedIDs, Errors: r.Errors}, nil
+	}
 	result := &UnfreezeResult{
 		FailedIDs: make([]uint64, 0),
 		Errors:    make([]string, 0),
@@ -169,6 +178,14 @@ func (s *SettlementService) unfreezePlayerIncome(ctx context.Context, playerID u
 // UnfreezeByOrderID manually unfreezes income for a specific order
 // This is useful for admin operations or dispute resolution
 func (s *SettlementService) UnfreezeByOrderID(ctx context.Context, orderID uint64) error {
+	if s.finance != nil {
+		record, err := s.commissions.GetRecordByOrderID(ctx, orderID)
+		if err != nil {
+			return err
+		}
+		_, err = s.finance.Unfreeze(ctx, record.ID)
+		return err
+	}
 	record, err := s.commissions.GetRecordByOrderID(ctx, orderID)
 	if err != nil {
 		return apierr.NotFound("commission record not found")
@@ -218,8 +235,8 @@ func (s *SettlementService) GetPendingSettlementStats(ctx context.Context) (*Pen
 	}
 
 	return &PendingStats{
-		TotalPendingCount:   total,
-		TotalFrozenCents:    totalFrozen,
+		TotalPendingCount:    total,
+		TotalFrozenCents:     totalFrozen,
 		ReadyToUnfreezeCount: readyCount,
 		ReadyToUnfreezeCents: readyToUnfreeze,
 	}, nil
@@ -232,3 +249,6 @@ type PendingStats struct {
 	ReadyToUnfreezeCount int64 `json:"readyToUnfreezeCount"`
 	ReadyToUnfreezeCents int64 `json:"readyToUnfreezeCents"`
 }
+
+// SetFinance injects the transactional accounting service.
+func (s *SettlementService) SetFinance(f *finance.Service) { s.finance = f }

@@ -187,7 +187,7 @@ func cancelOrderHandler(c *gin.Context, svc *order.OrderService) {
 			respondAPIError(c, apierr.BadRequest(err.Error()))
 			return
 		}
-		respondAPIError(c, apierr.InternalError("取消订单失败").WithDetails(err.Error()))
+		respondServiceError(c, err, "取消订单失败")
 		return
 	}
 
@@ -232,7 +232,7 @@ func completeOrderHandler(c *gin.Context, svc *order.OrderService) {
 			respondAPIError(c, apierr.BadRequest(err.Error()))
 			return
 		}
-		respondAPIError(c, apierr.InternalError("完成订单失败").WithDetails(err.Error()))
+		respondServiceError(c, err, "完成订单失败")
 		return
 	}
 

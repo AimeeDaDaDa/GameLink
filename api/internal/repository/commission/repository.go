@@ -2,6 +2,7 @@ package commission
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"gamelink/internal/model"
@@ -134,6 +135,9 @@ func (r *commissionRepository) GetRuleForOrder(ctx context.Context, gameID *uint
 		if err == nil {
 			return &rule, nil
 		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
 	}
 
 	// 2. 尝试获取游戏专属规则
@@ -145,6 +149,9 @@ func (r *commissionRepository) GetRuleForOrder(ctx context.Context, gameID *uint
 		if err == nil {
 			return &rule, nil
 		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
 	}
 
 	// 3. 尝试获取服务类型规则
@@ -155,6 +162,9 @@ func (r *commissionRepository) GetRuleForOrder(ctx context.Context, gameID *uint
 			First(&rule).Error
 		if err == nil {
 			return &rule, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
 		}
 	}
 

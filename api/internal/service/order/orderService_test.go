@@ -1446,3 +1446,11 @@ func TestOrderService_validateCreateOrder_PlayerNotFound(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, player)
 }
+
+func (m *MockUserRepository) GetByWeChatOpenID(ctx context.Context, openID string) (*model.User, error) {
+	return nil, repository.ErrNotFound
+}
+
+func (m *MockUserRepository) GetByWeChatUnionID(ctx context.Context, unionID string) (*model.User, error) {
+	return nil, repository.ErrNotFound
+}

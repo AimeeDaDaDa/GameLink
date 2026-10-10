@@ -20,11 +20,38 @@ type Withdraw = model.Withdraw
 func RegisterWithdrawRoutes(router gin.IRouter, withdrawRepo withdrawrepo.WithdrawRepository, withdrawService *withdrawservice.WithdrawRoutingService) {
 	group := router.Group("/withdraws")
 	{
+		group.GET("/stats", func(c *gin.Context) {
+			stats, err := withdrawService.GetFinancialStats(c.Request.Context())
+			if err != nil {
+				respondError(c, err)
+				return
+			}
+			respondSuccess(c, stats)
+		})
 		group.GET("", func(c *gin.Context) { listWithdrawsHandler(c, withdrawRepo) })
+		group.POST("/:id/prepare-salary", func(c *gin.Context) {
+			id, ok := ParseIDAndRespond(c, "id")
+			if !ok {
+				return
+			}
+			var req struct {
+				TaxDeductedCents int64 `json:"taxDeductedCents" binding:"min=0"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				respondBadRequest(c, err.Error())
+				return
+			}
+			r, err := withdrawService.ProcessWithdrawalRouting(c.Request.Context(), id, req.TaxDeductedCents)
+			if err != nil {
+				respondError(c, err)
+				return
+			}
+			respondSuccess(c, r)
+		})
 		group.GET("/:id", func(c *gin.Context) { getWithdrawHandler(c, withdrawRepo) })
-		group.POST("/:id/approve", func(c *gin.Context) { approveWithdrawHandler(c, withdrawRepo) })
-		group.POST("/:id/reject", func(c *gin.Context) { rejectWithdrawHandler(c, withdrawRepo) })
-		group.POST("/:id/complete", func(c *gin.Context) { completeWithdrawHandler(c, withdrawRepo) })
+		group.POST("/:id/approve", func(c *gin.Context) { approveWithdrawHandler(c, withdrawRepo, withdrawService) })
+		group.POST("/:id/reject", func(c *gin.Context) { rejectWithdrawHandler(c, withdrawRepo, withdrawService) })
+		group.POST("/:id/complete", func(c *gin.Context) { completeWithdrawHandler(c, withdrawRepo, withdrawService) })
 
 		// 批量操作路由
 		group.POST("/batch/approve", func(c *gin.Context) { batchApproveWithdrawalsHandler(c, withdrawService) })
@@ -142,7 +169,7 @@ type ApproveWithdrawRequest struct {
 // @Failure      400            {object}  model.ErrorResponse
 // @Failure      401            {object}  model.ErrorResponse
 // @Router       /admin/withdraws/{id}/approve [post]
-func approveWithdrawHandler(c *gin.Context, repo withdrawrepo.WithdrawRepository) {
+func approveWithdrawHandler(c *gin.Context, repo withdrawrepo.WithdrawRepository, services ...*withdrawservice.WithdrawRoutingService) {
 	id, ok := ParseIDAndRespond(c, "id")
 	if !ok {
 		return
@@ -155,6 +182,14 @@ func approveWithdrawHandler(c *gin.Context, repo withdrawrepo.WithdrawRepository
 
 	var req ApproveWithdrawRequest
 	_ = c.ShouldBindJSON(&req) // 可选字段，忽略绑定错误
+	if len(services) > 0 {
+		if err := services[0].ChangeWithdrawal(c.Request.Context(), id, adminUserID, model.WithdrawStatusApproved, req.Remark, ""); err != nil {
+			respondError(c, err)
+			return
+		}
+		respondMsg(c, "Withdraw approved")
+		return
+	}
 
 	withdraw, err := repo.Get(c.Request.Context(), id)
 	if err != nil {
@@ -201,7 +236,7 @@ type RejectWithdrawRequest struct {
 // @Failure      400            {object}  model.ErrorResponse
 // @Failure      401            {object}  model.ErrorResponse
 // @Router       /admin/withdraws/{id}/reject [post]
-func rejectWithdrawHandler(c *gin.Context, repo withdrawrepo.WithdrawRepository) {
+func rejectWithdrawHandler(c *gin.Context, repo withdrawrepo.WithdrawRepository, services ...*withdrawservice.WithdrawRoutingService) {
 	id, ok := ParseIDAndRespond(c, "id")
 	if !ok {
 		return
@@ -218,6 +253,14 @@ func rejectWithdrawHandler(c *gin.Context, repo withdrawrepo.WithdrawRepository)
 		return
 	}
 
+	if len(services) > 0 {
+		if err := services[0].ChangeWithdrawal(c.Request.Context(), id, adminUserID, model.WithdrawStatusRejected, req.Reason, ""); err != nil {
+			respondError(c, err)
+			return
+		}
+		respondMsg(c, "Withdraw rejected")
+		return
+	}
 	withdraw, err := repo.Get(c.Request.Context(), id)
 	if err != nil {
 		respondError(c, apierr.NotFound(apierr.ErrWithdrawNotFound))
@@ -257,7 +300,7 @@ func rejectWithdrawHandler(c *gin.Context, repo withdrawrepo.WithdrawRepository)
 // @Failure      400            {object}  model.ErrorResponse
 // @Failure      401            {object}  model.ErrorResponse
 // @Router       /admin/withdraws/{id}/complete [post]
-func completeWithdrawHandler(c *gin.Context, repo withdrawrepo.WithdrawRepository) {
+func completeWithdrawHandler(c *gin.Context, repo withdrawrepo.WithdrawRepository, services ...*withdrawservice.WithdrawRoutingService) {
 	id, ok := ParseIDAndRespond(c, "id")
 	if !ok {
 		return
@@ -268,6 +311,21 @@ func completeWithdrawHandler(c *gin.Context, repo withdrawrepo.WithdrawRepositor
 		return
 	}
 
+	if len(services) > 0 {
+		var req struct {
+			BankTransactionNo string `json:"bankTransactionNo" binding:"required,max=64"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			respondBadRequest(c, "请填写真实发放流水号")
+			return
+		}
+		if err := services[0].ChangeWithdrawal(c.Request.Context(), id, adminUserID, model.WithdrawStatusCompleted, "", req.BankTransactionNo); err != nil {
+			respondError(c, err)
+			return
+		}
+		respondMsg(c, "发放已登记")
+		return
+	}
 	withdraw, err := repo.Get(c.Request.Context(), id)
 	if err != nil {
 		respondError(c, apierr.NotFound(apierr.ErrWithdrawNotFound))

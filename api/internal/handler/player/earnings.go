@@ -205,7 +205,7 @@ func requestWithdrawHandler(c *gin.Context, svc *userservice.EarningsService) {
 			return
 		}
 
-		respondAPIError(c, apierr.InternalError("申请提现失败").WithDetails(err.Error()))
+		respondServiceError(c, err, "申请提现失败")
 		return
 	}
 

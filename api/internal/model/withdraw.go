@@ -53,13 +53,13 @@ type Withdraw struct {
 	UpdatedAt    time.Time      `gorm:"autoUpdateTime" json:"updatedAt"`
 
 	// 提现分流相关字段 - Requirements: 13.2, 13.5
-	SettlementCompanyID   *uint64    `gorm:"index" json:"settlementCompanyId,omitempty"`               // 结算公司ID
-	SettlementCompanyName string     `gorm:"type:varchar(200)" json:"settlementCompanyName,omitempty"` // 结算公司名称（冗余字段，便于查询）
-	PaymentBankAccount    string     `gorm:"type:varchar(30)" json:"paymentBankAccount,omitempty"`     // 付款银行账户
-	BankTransactionNo     string     `gorm:"type:varchar(64)" json:"bankTransactionNo,omitempty"`      // 银行流水号
-	TaxDeductedCents      int64      `gorm:"default:0" json:"taxDeductedCents"`                        // 代扣个税金额（分）
-	ActualAmountCents     int64      `gorm:"default:0" json:"actualAmountCents"`                       // 实际到账金额（分）
-	PaidAt                *time.Time `json:"paidAt,omitempty"`                                         // 付款时间
+	SettlementCompanyID   *uint64    `gorm:"index" json:"settlementCompanyId,omitempty"`                                                                               // 结算公司ID
+	SettlementCompanyName string     `gorm:"type:varchar(200)" json:"settlementCompanyName,omitempty"`                                                                 // 结算公司名称（冗余字段，便于查询）
+	PaymentBankAccount    string     `gorm:"type:varchar(30)" json:"paymentBankAccount,omitempty"`                                                                     // 付款银行账户
+	BankTransactionNo     string     `gorm:"type:varchar(64);uniqueIndex:idx_withdraw_transaction,where:bank_transaction_no <> ''" json:"bankTransactionNo,omitempty"` // 银行流水号
+	TaxDeductedCents      int64      `gorm:"default:0" json:"taxDeductedCents"`                                                                                        // 代扣个税金额（分）
+	ActualAmountCents     int64      `gorm:"default:0" json:"actualAmountCents"`                                                                                       // 实际到账金额（分）
+	PaidAt                *time.Time `json:"paidAt,omitempty"`                                                                                                         // 付款时间
 
 	// Relations
 	SettlementCompany *SettlementCompany `json:"-" gorm:"foreignKey:SettlementCompanyID;references:ID"`
@@ -90,7 +90,7 @@ func (w *Withdraw) SetRoutingInfo(company *SettlementCompany) {
 // Requirements: 13.4
 type SalaryPaymentRecord struct {
 	Base
-	WithdrawID            uint64     `json:"withdrawId" gorm:"column:withdraw_id;not null;index"`                    // 关联提现ID
+	WithdrawID            uint64     `json:"withdrawId" gorm:"column:withdraw_id;not null;uniqueIndex"`              // 关联提现ID
 	PlayerID              uint64     `json:"playerId" gorm:"column:player_id;not null;index"`                        // 陪玩师ID
 	SettlementCompanyID   uint64     `json:"settlementCompanyId" gorm:"column:settlement_company_id;not null;index"` // 结算公司ID
 	SettlementCompanyName string     `json:"settlementCompanyName" gorm:"column:settlement_company_name;size:200"`   // 结算公司名称

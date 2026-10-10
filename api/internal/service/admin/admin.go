@@ -19,6 +19,7 @@ import (
 	"gamelink/internal/repository/common"
 	repoiface "gamelink/internal/repository/interfaces"
 	feedservice "gamelink/internal/service/feed"
+	"gamelink/internal/service/finance"
 	"gamelink/pkg/apierr"
 	"gamelink/pkg/cache"
 	"gamelink/pkg/logging"
@@ -40,6 +41,7 @@ var (
 
 // AdminService 聚合后台管理所需的业务逻辑。
 type AdminService struct {
+	finance        *finance.Service
 	games          repository.GameRepository
 	users          repository.UserRepository
 	players        repository.PlayerRepository
@@ -1118,9 +1120,11 @@ type UpdateOrderInput struct {
 
 // RefundOrderInput 描述退款请求。
 type RefundOrderInput struct {
-	Reason      string
-	AmountCents *int64
-	Note        string
+	ExternalReceipt string
+	RequestID       string
+	Reason          string
+	AmountCents     *int64
+	Note            string
 }
 
 // OrderTimelineItem 组合订单历史时间线。
@@ -1185,6 +1189,33 @@ func (s *AdminService) UpdateOrder(ctx context.Context, id uint64, input UpdateO
 		return nil, WrapError(err, "get order")
 	}
 
+	if s.finance != nil {
+		if input.TotalPriceCents != order.TotalPriceCents || input.Currency != order.Currency {
+			return nil, apierr.BadRequest("财务保护：不能通过状态接口修改订单金额或币种")
+		}
+		if input.Status == model.OrderStatusCompleted {
+			updated, e := s.finance.CompleteOrder(ctx, id, 0, "admin")
+			if e == nil {
+				s.invalidateCache(ctx, cacheKeyOrders)
+			}
+			return updated, e
+		}
+		if input.Status == model.OrderStatusRefunded || input.RefundAmountCents != nil {
+			return nil, apierr.BadRequest("请使用实际退款接口")
+		}
+		if input.Status == model.OrderStatusConfirmed && order.Status == model.OrderStatusPending {
+			return nil, apierr.BadRequest("请先核实收款记录，不能直接确认未支付订单")
+		}
+		if input.Status == model.OrderStatusCanceled && order.Status != model.OrderStatusPending {
+			return nil, apierr.BadRequest("已支付订单需退款，不能直接取消")
+		}
+		updated, e := s.finance.TransitionOrder(ctx, id, 0, "admin", input.Status, input.CancelReason)
+		if e == nil {
+			s.invalidateCache(ctx, cacheKeyOrders)
+			s.appendLogAsync(ctx, string(model.OpEntityOrder), id, string(model.OpActionUpdateStatus), map[string]any{"status": input.Status, "note": input.Note})
+		}
+		return updated, e
+	}
 	if !isValidOrderStatus(input.Status) {
 		return nil, ErrValidation
 	}
@@ -1351,6 +1382,32 @@ func (s *AdminService) CompleteOrder(ctx context.Context, id uint64, note string
 
 // RefundOrder 执行退款并记录退款信息。
 func (s *AdminService) RefundOrder(ctx context.Context, id uint64, input RefundOrderInput) (*model.Order, error) {
+	if s.finance != nil {
+		payments, err := s.payments.GetByOrderID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range payments {
+			if p.Status == model.PaymentStatusPaid || (p.Status == model.PaymentStatusRefunded && input.RequestID != "") {
+				amount := p.RemainingRefundableAmount()
+				if input.AmountCents != nil {
+					amount = *input.AmountCents
+				}
+				if input.ExternalReceipt != "" {
+					_, err = s.finance.RefundManual(ctx, p.ID, amount, input.Reason, nil, input.RequestID, input.ExternalReceipt)
+				} else {
+					_, err = s.finance.RefundWallet(ctx, p.ID, amount, input.Reason, nil, input.RequestID)
+				}
+				if err != nil {
+					return nil, err
+				}
+				s.invalidateCache(ctx, cacheKeyPayments)
+				s.invalidateCache(ctx, cacheKeyOrders)
+				return s.orders.Get(ctx, id)
+			}
+		}
+		return nil, apierr.BadRequest("没有可退款的已支付记录")
+	}
 	order, err := s.orders.Get(ctx, id)
 	if err != nil {
 		return nil, WrapError(err, "get order")
@@ -1624,6 +1681,8 @@ func (s *AdminService) DeleteOrder(ctx context.Context, id uint64) error {
 
 // UpdatePaymentInput 调整支付状态。
 type UpdatePaymentInput struct {
+	ExternalReceipt     string
+	RequestID           string
 	Status              model.PaymentStatus
 	ProviderTradeNo     string
 	ProviderRaw         json.RawMessage
@@ -1682,6 +1741,14 @@ type CapturePaymentInput struct {
 
 // CapturePayment 将支付置为 paid。
 func (s *AdminService) CapturePayment(ctx context.Context, id uint64, in CapturePaymentInput) (*model.Payment, error) {
+	if s.finance != nil {
+		p, err := s.finance.CaptureManual(ctx, id, in.ProviderTradeNo)
+		if err == nil {
+			s.invalidateCache(ctx, cacheKeyPayments)
+			s.appendLogAsync(ctx, string(model.OpEntityPayment), id, string(model.OpActionCapture), map[string]any{"trade_no": in.ProviderTradeNo, "source": "manual_reconciliation"})
+		}
+		return p, err
+	}
 	pay, err := s.payments.Get(ctx, id)
 	if err != nil {
 		return nil, WrapError(err, "get payment")
@@ -1750,6 +1817,14 @@ func (s *AdminService) GetPaymentsByOrderID(ctx context.Context, orderID uint64)
 
 // UpdatePayment 更新支付状态。
 func (s *AdminService) UpdatePayment(ctx context.Context, id uint64, input UpdatePaymentInput) (*model.Payment, error) {
+	if s.finance != nil {
+		if input.Status == model.PaymentStatusPaid {
+			return s.CapturePayment(ctx, id, CapturePaymentInput{ProviderTradeNo: input.ProviderTradeNo})
+		}
+		if input.Status == model.PaymentStatusRefunded {
+			return nil, apierr.BadRequest("请使用退款接口，不能直接修改资金状态")
+		}
+	}
 	payment, err := s.payments.Get(ctx, id)
 	if err != nil {
 		return nil, WrapError(err, "get payment")
@@ -1789,6 +1864,21 @@ func (s *AdminService) UpdatePayment(ctx context.Context, id uint64, input Updat
 // UpdatePaymentWithRefund processes a refund with amount validation and logging.
 // Requirements: 2.1, 2.2, 2.3, 2.4, 9.1, 9.2, 9.3
 func (s *AdminService) UpdatePaymentWithRefund(ctx context.Context, id uint64, input UpdatePaymentInput, refundAmount int64, reason string, operatorID *uint64) (*model.Payment, error) {
+	if s.finance != nil {
+		var r *model.RefundResponse
+		var err error
+		if input.ExternalReceipt != "" {
+			r, err = s.finance.RefundManual(ctx, id, refundAmount, reason, operatorID, input.RequestID, input.ExternalReceipt)
+		} else {
+			r, err = s.finance.RefundWallet(ctx, id, refundAmount, reason, operatorID, input.RequestID)
+		}
+		if err != nil {
+			return nil, err
+		}
+		s.invalidateCache(ctx, cacheKeyPayments)
+		s.invalidateCache(ctx, cacheKeyOrders)
+		return r.Payment, nil
+	}
 	payment, err := s.payments.Get(ctx, id)
 	if err != nil {
 		return nil, WrapError(err, "get payment")
@@ -1855,6 +1945,9 @@ func (s *AdminService) UpdatePaymentWithRefund(ctx context.Context, id uint64, i
 
 // DeletePayment 删除支付记录。
 func (s *AdminService) DeletePayment(ctx context.Context, id uint64) error {
+	if s.finance != nil {
+		return apierr.BadRequest("账务记录需保留审计，不能删除")
+	}
 	if err := s.payments.Delete(ctx, id); err != nil {
 		return WrapError(err, "delete payment")
 	}
@@ -1894,6 +1987,9 @@ type BatchCaptureRequest struct {
 // 2. 支付会设置为paid状态
 // 3. 返回成功/失败计数及错误详情
 func (s *AdminService) BatchCapture(ctx context.Context, req BatchCaptureRequest) (*BatchCaptureResult, error) {
+	if s.finance != nil {
+		return nil, apierr.BadRequest("请逐笔核实收款并填写独立的真实流水号")
+	}
 	if len(req.PaymentIDs) == 0 {
 		return nil, apierr.BadRequest("payment ids cannot be empty")
 	}
@@ -1989,6 +2085,33 @@ type BatchRefundRequest struct {
 // 2. 全额退款，状态更新为refunded
 // 3. 订单状态也会更新为refunded
 func (s *AdminService) BatchRefund(ctx context.Context, req BatchRefundRequest) (*BatchCaptureResult, error) {
+	if s.finance != nil {
+		if len(req.PaymentIDs) == 0 || len(req.PaymentIDs) > 500 {
+			return nil, apierr.BadRequest("1-500 payments required")
+		}
+		r := &BatchCaptureResult{FailedIDs: []uint64{}, Errors: []BatchOperationError{}}
+		seen := map[uint64]bool{}
+		for _, id := range req.PaymentIDs {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			p, e := s.payments.Get(ctx, id)
+			if e == nil {
+				_, e = s.finance.RefundWallet(ctx, id, p.RemainingRefundableAmount(), req.Reason, nil)
+			}
+			if e != nil {
+				r.FailedCount++
+				r.FailedIDs = append(r.FailedIDs, id)
+				r.Errors = append(r.Errors, BatchOperationError{PaymentID: id, Message: e.Error()})
+			} else {
+				r.SuccessCount++
+			}
+		}
+		s.invalidateCache(ctx, cacheKeyPayments)
+		s.invalidateCache(ctx, cacheKeyOrders)
+		return r, nil
+	}
 	if len(req.PaymentIDs) == 0 {
 		return nil, apierr.BadRequest("payment ids cannot be empty")
 	}
@@ -2183,6 +2306,9 @@ type BatchUpdateStatusRequest struct {
 // 1. 验证状态转换是否有效
 // 2. 只允许有效的状态转换
 func (s *AdminService) BatchUpdateStatus(ctx context.Context, req BatchUpdateStatusRequest) (*BatchCaptureResult, error) {
+	if s.finance != nil && (req.Status == model.PaymentStatusPaid || req.Status == model.PaymentStatusRefunded) {
+		return nil, apierr.BadRequest("资金状态必须通过核账或退款接口更新")
+	}
 	if len(req.PaymentIDs) == 0 {
 		return nil, apierr.BadRequest("payment ids cannot be empty")
 	}
@@ -3474,3 +3600,6 @@ func (s *AdminService) BatchUpdateGamesSortOrder(ctx context.Context, updates ma
 	}
 	return updated, nil
 }
+
+// SetFinance injects the transactional accounting service.
+func (s *AdminService) SetFinance(f *finance.Service) { s.finance = f }

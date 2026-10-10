@@ -11,6 +11,7 @@ import (
 	commissionrepo "gamelink/internal/repository/commission"
 	repoiface "gamelink/internal/repository/interfaces"
 	"gamelink/internal/repository/ordergroup"
+	"gamelink/internal/service/finance"
 	"gamelink/pkg/apierr"
 	"gamelink/pkg/cache"
 )
@@ -34,6 +35,7 @@ var (
 // 3. 订单状态流转管理
 // 4. 订单拆分与转单
 type OrderService struct {
+	finance         *finance.Service
 	orders          repoiface.OrderRepository
 	orderGroups     ordergroup.Repository // 主订单仓储
 	players         repository.PlayerRepository
@@ -110,9 +112,9 @@ type CreateOrderRequest struct {
 // CreateOrderResponse 创建订单响应
 type CreateOrderResponse struct {
 	OrderID       uint64 `json:"orderId"`
-	GroupNo       string `json:"groupNo,omitempty"`       // 主订单号（拆分时返回）
+	GroupNo       string `json:"groupNo,omitempty"` // 主订单号（拆分时返回）
 	PriceCents    int64  `json:"priceCents"`
-	TotalHours    int    `json:"totalHours,omitempty"`    // 总时长（拆分时返回）
+	TotalHours    int    `json:"totalHours,omitempty"` // 总时长（拆分时返回）
 	NeedPayment   bool   `json:"needPayment"`
 	IsSplit       bool   `json:"isSplit,omitempty"`       // 是否拆分订单
 	SubOrderCount int    `json:"subOrderCount,omitempty"` // 子订单数量
@@ -274,12 +276,12 @@ func (s *OrderService) createOrderWithSplit(
 	}
 
 	return &CreateOrderResponse{
-		OrderID:     group.ID,                // 返回主订单ID（用户视角）
-		GroupNo:     group.GroupNo,           // 主订单号
-		PriceCents:  group.TotalPriceCents,
-		TotalHours:  group.TotalHours,
-		NeedPayment: true,
-		IsSplit:     true,
+		OrderID:       group.ID,      // 返回主订单ID（用户视角）
+		GroupNo:       group.GroupNo, // 主订单号
+		PriceCents:    group.TotalPriceCents,
+		TotalHours:    group.TotalHours,
+		NeedPayment:   true,
+		IsSplit:       true,
 		SubOrderCount: len(subOrders),
 	}, nil
 }
@@ -482,6 +484,13 @@ func (s *OrderService) GetOrderDetail(ctx context.Context, userID uint64, orderI
 
 // CancelOrder 取消订单（用户端）
 func (s *OrderService) CancelOrder(ctx context.Context, userID uint64, orderID uint64, req CancelOrderRequest) error {
+	if s.finance != nil {
+		_, err := s.finance.TransitionOrder(ctx, orderID, userID, "user", model.OrderStatusCanceled, req.Reason)
+		if err == nil {
+			s.deactivateOrderChat(ctx, orderID)
+		}
+		return err
+	}
 	// 获取订单
 	order, err := s.orders.Get(ctx, orderID)
 	if err != nil {
@@ -539,6 +548,13 @@ func (s *OrderService) CancelOrder(ctx context.Context, userID uint64, orderID u
 
 // CompleteOrder 确认完成订单（用户端）
 func (s *OrderService) CompleteOrder(ctx context.Context, userID uint64, orderID uint64) error {
+	if s.finance != nil {
+		_, err := s.finance.CompleteOrder(ctx, orderID, userID, "user")
+		if err == nil {
+			s.deactivateOrderChat(ctx, orderID)
+		}
+		return err
+	}
 	// 获取订单
 	order, err := s.orders.Get(ctx, orderID)
 	if err != nil {
@@ -577,6 +593,10 @@ func (s *OrderService) CompleteOrder(ctx context.Context, userID uint64, orderID
 
 // recordCommissionAsync 异步记录抽成
 func (s *OrderService) recordCommissionAsync(ctx context.Context, orderID uint64) error {
+	if s.finance != nil {
+		_, err := s.finance.CompleteOrder(ctx, orderID, 0, "admin")
+		return err
+	}
 	// 检查是否已记录
 	existing, _ := s.commissions.GetRecordByOrderID(ctx, orderID)
 	if existing != nil {
@@ -939,6 +959,10 @@ func (s *OrderService) GetAvailableOrders(ctx context.Context, req AvailableOrde
 // AcceptOrder 接单（陪玩师端）
 // 使用原子性更新避免并发竞态条件,确保一个订单只能被一个陪玩师接单
 func (s *OrderService) AcceptOrder(ctx context.Context, playerUserID uint64, orderID uint64) error {
+	if s.finance != nil {
+		_, err := s.finance.TransitionOrder(ctx, orderID, playerUserID, "player", model.OrderStatusInProgress, "")
+		return err
+	}
 	// 直接根据UserID查找陪玩师 (性能优化: 避免全表扫描)
 	player, err := s.players.GetByUserID(ctx, playerUserID)
 	if err != nil {
@@ -970,6 +994,10 @@ func (s *OrderService) AcceptOrder(ctx context.Context, playerUserID uint64, ord
 
 // CompleteOrderByPlayer 完成订单（陪玩师端）
 func (s *OrderService) CompleteOrderByPlayer(ctx context.Context, playerUserID uint64, orderID uint64) error {
+	if s.finance != nil {
+		_, err := s.finance.CompleteOrder(ctx, orderID, playerUserID, "player")
+		return err
+	}
 	// 直接根据UserID查找陪玩师 (性能优化: 避免全表扫描)
 	player, err := s.players.GetByUserID(ctx, playerUserID)
 	if err != nil {
@@ -1011,3 +1039,6 @@ func (s *OrderService) CompleteOrderByPlayer(ctx context.Context, playerUserID u
 
 	return nil
 }
+
+// SetFinance injects the transactional accounting service.
+func (s *OrderService) SetFinance(f *finance.Service) { s.finance = f }

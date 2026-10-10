@@ -30,6 +30,7 @@ import (
 	withdrawrepo "gamelink/internal/repository/withdraw"
 	adminservice "gamelink/internal/service/admin"
 	authservice "gamelink/internal/service/auth"
+	"gamelink/internal/service/orderentry"
 	settlementcompanysvc "gamelink/internal/service/settlementcompany"
 	"gamelink/internal/ws"
 	"gamelink/pkg/auth"
@@ -214,6 +215,7 @@ func (r *Router) registerAdminRoutes(api *gin.RouterGroup) {
 
 	// Register admin routes under versioned prefix: /api/v1/admin
 	rbacGroup := api.Group("/admin")
+	rbacGroup.Use(r.permMiddleware.RequireAuth(), r.permMiddleware.RequirePermissionAuto())
 
 	// CSRF 保护配置
 	// 根据环境变量决定是否启用 CSRF
@@ -236,6 +238,10 @@ func (r *Router) registerAdminRoutes(api *gin.RouterGroup) {
 	adminhandler.RegisterStatsRoutes(rbacGroup, statsSvc, r.permMiddleware)
 	adminhandler.RegisterReviewStatsRoutes(rbacGroup, r.services.reviewStatsSvc, r.permMiddleware)
 	adminhandler.RegisterReviewSettingsRoutes(rbacGroup, r.services.reviewSettingsSvc, r.permMiddleware)
+
+	// 录单（客服下单）路由
+	orderEntryHandler := adminhandler.NewOrderEntryHandler(orderentry.New(r.orm))
+	adminhandler.RegisterOrderEntryRoutes(rbacGroup, orderEntryHandler, r.permMiddleware)
 
 	// 创建菜单服务用于批量同步
 	menuSvc := adminservice.NewMenuService(adminrepo.NewMenuRepository(r.orm))

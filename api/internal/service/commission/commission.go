@@ -11,6 +11,7 @@ import (
 	"gamelink/internal/repository"
 	commissionrepo "gamelink/internal/repository/commission"
 	repoiface "gamelink/internal/repository/interfaces"
+	"gamelink/internal/service/finance"
 	"gamelink/pkg/apierr"
 	"gamelink/pkg/cache"
 )
@@ -35,6 +36,7 @@ const (
 
 // CommissionService 抽成服务
 type CommissionService struct {
+	finance     *finance.Service
 	commissions commissionrepo.CommissionRepository
 	orders      repoiface.OrderReader
 	players     repository.PlayerRepository
@@ -123,6 +125,10 @@ func (s *CommissionService) CalculateCommission(ctx context.Context, orderID uin
 
 // RecordCommission 记录订单抽成
 func (s *CommissionService) RecordCommission(ctx context.Context, orderID uint64) error {
+	if s.finance != nil {
+		_, err := s.finance.CompleteOrder(ctx, orderID, 0, "admin")
+		return err
+	}
 	// 1. 检查是否已记录
 	existing, _ := s.commissions.GetRecordByOrderID(ctx, orderID)
 	if existing != nil {
@@ -173,6 +179,9 @@ type PlayerMonthStats struct {
 
 // SettleMonth 月度结算
 func (s *CommissionService) SettleMonth(ctx context.Context, month string) error {
+	if s.finance != nil {
+		return s.finance.BuildMonth(ctx, month)
+	}
 	// 1. 检查是否已经结算过
 	settlements, _, err := s.commissions.ListSettlements(ctx, commissionrepo.SettlementListOptions{
 		SettlementMonth: &month,
@@ -784,4 +793,21 @@ func (s *CommissionService) BatchUpdateCommissionRuleStatus(ctx context.Context,
 	}
 
 	return result, nil
+}
+
+// SetFinance injects the transactional accounting service.
+func (s *CommissionService) SetFinance(f *finance.Service) { s.finance = f }
+
+func (s *CommissionService) ProcessT7(ctx context.Context) error {
+	if s.finance == nil {
+		return fmt.Errorf("transactional finance is not configured")
+	}
+	result, err := s.finance.UnfreezeDue(ctx)
+	if err != nil {
+		return err
+	}
+	if result.FailedCount > 0 {
+		return fmt.Errorf("%d records could not settle: %v", result.FailedCount, result.Errors)
+	}
+	return nil
 }

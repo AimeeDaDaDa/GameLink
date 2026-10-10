@@ -24,6 +24,7 @@ import (
 	walletrepo "gamelink/internal/repository/wallet"
 	"gamelink/internal/router"
 	adminservice "gamelink/internal/service/admin"
+	"gamelink/internal/service/finance"
 	"gamelink/pkg/cache"
 	"gamelink/pkg/config"
 	"gamelink/pkg/db"
@@ -110,6 +111,7 @@ func ProvideAdminService(orm *gorm.DB, cacheClient cache.Cache) *adminservice.Ad
 		cacheClient,
 	)
 	svc.SetTxManager(common.NewUnitOfWork(orm))
+	svc.SetFinance(finance.New(orm))
 	return svc
 }
 

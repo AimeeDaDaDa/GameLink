@@ -14,10 +14,10 @@ import (
 
 // SettlementScheduler 结算调度器
 type SettlementScheduler struct {
-	commissionSvc interface{}            // Use interface to allow mocking
-	lock          cache.DistributedLock  // Redis distributed lock
+	commissionSvc interface{}           // Use interface to allow mocking
+	lock          cache.DistributedLock // Redis distributed lock
 	logger        *slog.Logger
-	Cron          *cron.Cron  // Exported for testing
+	Cron          *cron.Cron // Exported for testing
 }
 
 // NewSettlementScheduler 创建结算调度器
@@ -32,6 +32,10 @@ func NewSettlementScheduler(commissionSvc *commission.CommissionService, lock ca
 
 // Start 启动调度器
 func (s *SettlementScheduler) Start() {
+	if len(s.Cron.Entries()) > 0 {
+		s.Cron.Start()
+		return
+	}
 	// 每月1号凌晨2点执行月度结算
 	_, err := s.Cron.AddFunc("0 2 1 * *", s.monthlySettlementWithLock)
 	if err != nil {
@@ -39,6 +43,20 @@ func (s *SettlementScheduler) Start() {
 		return
 	}
 
+	_, err = s.Cron.AddFunc("0 3 * * *", func() {
+		ctx := context.Background()
+		svc, ok := s.commissionSvc.(interface{ ProcessT7(context.Context) error })
+		if !ok {
+			return
+		}
+		if err := svc.ProcessT7(ctx); err != nil {
+			s.logger.Error("T+7 settlement failed", "error", err)
+		}
+	})
+	if err != nil {
+		s.logger.Error("Failed to add T+7 job", "error", err)
+		return
+	}
 	s.Cron.Start()
 	s.logger.Info("Settlement scheduler started - will run on 1st of each month at 02:00 with distributed lock")
 }

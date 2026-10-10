@@ -48,9 +48,10 @@ const columns: ColumnsType<LevelData> = [
         width: 80,
         render: () => (
             <Space size={4}>
-            <Button type="link" icon={<EditOutlined />}>
-                编辑
-            </Button>
+                <Button type="link" icon={<EditOutlined />}>
+                    编辑
+                </Button>
+            </Space>
         ),
     },
 ];

@@ -84,6 +84,6 @@ type User struct {
 	VipLevel *VipLevel `json:"vipLevel,omitempty" gorm:"foreignKey:VipLevelID"`
 
 	// 微信小程序字段
-	WeChatOpenID  string `json:"-" gorm:"column:wechat_open_id;size:64;uniqueIndex"`  // 微信 OpenID
-	WeChatUnionID string `json:"-" gorm:"column:wechat_union_id;size:64;index"`       // 微信 UnionID（跨应用）
+	WeChatOpenID  string `json:"-" gorm:"column:wechat_open_id;size:64;uniqueIndex:,where:wechat_open_id <> ''"` // 微信 OpenID；未绑定的空值可重复
+	WeChatUnionID string `json:"-" gorm:"column:wechat_union_id;size:64;index"`                                  // 微信 UnionID（跨应用）
 }

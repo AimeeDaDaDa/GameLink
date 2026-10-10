@@ -51,13 +51,14 @@ type Payment struct {
 	RequestID           string          `json:"requestId,omitempty" gorm:"column:request_id;size:64;uniqueIndex:idx_payment_idempotent,where:request_id IS NOT NULL AND request_id != ''"`
 	OrderID             uint64          `json:"orderId" gorm:"column:order_id;not null;index"`
 	UserID              uint64          `json:"userId" gorm:"column:user_id;not null;index"`
-	Method              PaymentMethod   `json:"method" gorm:"size:32"`
+	Method              PaymentMethod   `json:"method" gorm:"size:32;uniqueIndex:idx_payment_trade,priority:1,where:provider_trade_no <> ''"`
 	AmountCents         int64           `json:"amountCents" gorm:"column:amount_cents"`
 	Currency            Currency        `json:"currency,omitempty" gorm:"type:char(3)"` // default CNY
 	Status              PaymentStatus   `json:"status" gorm:"size:32;index"`
-	ProviderTradeNo     string          `json:"providerTradeNo,omitempty" gorm:"column:provider_trade_no;size:128"`
+	ProviderTradeNo     string          `json:"providerTradeNo,omitempty" gorm:"column:provider_trade_no;size:128;uniqueIndex:idx_payment_trade,priority:2,where:provider_trade_no <> ''"`
 	ProviderRaw         json.RawMessage `json:"providerRaw,omitempty" gorm:"column:provider_raw;type:json"` // provider response payload
 	PaidAt              *time.Time      `json:"paidAt,omitempty" gorm:"column:paid_at"`
+	VerifiedAt          *time.Time      `json:"verifiedAt,omitempty" gorm:"column:verified_at"`
 	RefundedAt          *time.Time      `json:"refundedAt,omitempty" gorm:"column:refunded_at"`
 	RefundedAmountCents int64           `json:"refundedAmountCents" gorm:"column:refunded_amount_cents;default:0"`     // 已退款金额（分）
 	CollectionEntityID  *uint64         `json:"collectionEntityId,omitempty" gorm:"column:collection_entity_id;index"` // 收款主体ID
@@ -225,13 +226,14 @@ func (p *Payment) GetAllowedTransitions() []PaymentStatus {
 // A payment can have multiple partial refunds.
 type RefundRecord struct {
 	Base
+	RequestID       string       `json:"requestId" gorm:"size:128;uniqueIndex:idx_refund_request,where:request_id <> ''"`
 	PaymentID       uint64       `json:"paymentId" gorm:"column:payment_id;not null;index"`
 	OrderID         uint64       `json:"orderId" gorm:"column:order_id;not null;index"`
 	UserID          uint64       `json:"userId" gorm:"column:user_id;not null;index"`
 	AmountCents     int64        `json:"amountCents" gorm:"column:amount_cents;not null"`
 	Reason          string       `json:"reason,omitempty" gorm:"type:text"`
 	Status          RefundStatus `json:"status" gorm:"size:32;index"`
-	ProviderTradeNo string       `json:"providerTradeNo,omitempty" gorm:"column:provider_trade_no;size:128"`
+	ProviderTradeNo string       `json:"providerTradeNo,omitempty" gorm:"column:provider_trade_no;size:128;uniqueIndex:idx_refund_trade,where:provider_trade_no <> ''"`
 	OperatorID      *uint64      `json:"operatorId,omitempty" gorm:"column:operator_id;index"` // Admin who initiated the refund
 	RefundedAt      *time.Time   `json:"refundedAt,omitempty" gorm:"column:refunded_at"`
 	Note            string       `json:"note,omitempty" gorm:"type:text"` // Internal note

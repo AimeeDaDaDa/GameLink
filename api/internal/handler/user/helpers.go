@@ -28,6 +28,10 @@ func respondAPIError(c *gin.Context, err error) {
 	resp.Error(c, err)
 }
 
+func respondServiceError(c *gin.Context, err error, fallback string) {
+	resp.ErrorWithFallback(c, err, fallback)
+}
+
 // parseUintParam parses a uint64 path parameter.
 func parseUintParam(c *gin.Context, name string) (uint64, error) {
 	return resp.ParseUintParam(c, name)

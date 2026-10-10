@@ -12,6 +12,7 @@ import (
 	repoiface "gamelink/internal/repository/interfaces"
 	"gamelink/internal/repository/routingrule"
 	"gamelink/internal/service/external"
+	"gamelink/internal/service/finance"
 	routingruleservice "gamelink/internal/service/routingrule"
 	"gamelink/pkg/apierr"
 	"gamelink/pkg/cache"
@@ -37,6 +38,7 @@ var (
 // 4. 处理支付回调（Mock版本）
 // 5. 收款分流（Requirements: 17.1, 17.2, 17.3）
 type PaymentService struct {
+	finance         *finance.Service
 	payments        repository.PaymentRepository
 	orders          repoiface.OrderReadWriter
 	providers       map[model.PaymentMethod]ProviderClient
@@ -137,6 +139,16 @@ type PaymentStatusResponse struct {
 // - 如果存在且状态为 pending，返回冲突错误
 // - 如果存在且状态为 failed，允许重新创建
 func (s *PaymentService) CreatePayment(ctx context.Context, userID uint64, req CreatePaymentRequest) (*CreatePaymentResponse, error) {
+	if s.finance != nil {
+		if req.Method != model.PaymentMethodWallet {
+			return nil, finance.ErrGatewayUnavailable
+		}
+		p, err := s.finance.PayWallet(ctx, userID, req.OrderID, req.RequestID)
+		if err != nil {
+			return nil, err
+		}
+		return &CreatePaymentResponse{PaymentID: p.ID, WalletDeducted: p.WalletAmountCents, WalletPaidDirect: true, PayInfo: map[string]interface{}{"method": "wallet", "status": string(p.Status)}}, nil
+	}
 	// 幂等性检查：如果提供了 RequestID，先检查是否已存在
 	if req.RequestID != "" {
 		existingPayment, err := s.payments.GetByRequestID(ctx, req.RequestID)
@@ -527,6 +539,9 @@ func (s *PaymentService) mockPaymentSuccess(ctx context.Context, paymentID uint6
 // 2. 防止重复回调
 // 3. 使用事务确保数据一致性
 func (s *PaymentService) HandlePaymentCallback(ctx context.Context, provider string, data map[string]interface{}) error {
+	if s.finance != nil {
+		return finance.ErrGatewayUnavailable
+	}
 	// 获取支付ID
 	paymentID, ok := data["payment_id"].(uint64)
 	if !ok {
@@ -601,6 +616,14 @@ func (s *PaymentService) HandlePaymentCallback(ctx context.Context, provider str
 // 2. 纯钱包支付：退回钱包
 // 3. 组合支付：钱包部分退回钱包，第三方部分退回第三方
 func (s *PaymentService) RefundPayment(ctx context.Context, paymentID uint64, reason string) error {
+	if s.finance != nil {
+		p, err := s.payments.Get(ctx, paymentID)
+		if err != nil {
+			return err
+		}
+		_, err = s.finance.RefundWallet(ctx, paymentID, p.RemainingRefundableAmount(), reason, nil)
+		return err
+	}
 	payment, err := s.payments.Get(ctx, paymentID)
 	if err != nil {
 		return err
@@ -854,4 +877,18 @@ func (s *PaymentService) CalculateCombinedPayment(ctx context.Context, userID ui
 		ThirdPartyAmountCents: thirdPartyAmount,
 		CanPayWithWalletOnly:  walletBalance >= order.TotalPriceCents,
 	}, nil
+}
+
+// SetFinance injects the transactional accounting service.
+func (s *PaymentService) SetFinance(f *finance.Service) { s.finance = f }
+
+func (s *PaymentService) GetPaymentForUser(ctx context.Context, userID, paymentID uint64) (*model.Payment, error) {
+	p, err := s.payments.Get(ctx, paymentID)
+	if err != nil {
+		return nil, apierr.NotFound("payment not found")
+	}
+	if p.UserID != userID {
+		return nil, apierr.Forbidden("无权查看其他用户的支付记录")
+	}
+	return p, nil
 }

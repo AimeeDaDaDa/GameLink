@@ -10,6 +10,7 @@ import (
 	"gamelink/internal/model"
 	"gamelink/internal/repository"
 	repoiface "gamelink/internal/repository/interfaces"
+	"gamelink/internal/service/finance"
 	"gamelink/pkg/apierr"
 )
 
@@ -34,6 +35,7 @@ var (
 
 // DisputeService handles dispute operations
 type DisputeService struct {
+	finance        *finance.Service
 	disputes       repository.DisputeRepository
 	orders         repoiface.OrderReadWriter
 	users          repository.UserRepository
@@ -106,6 +108,14 @@ type InitiateDisputeResponse struct {
 
 // InitiateDispute creates a new dispute for an order
 func (s *DisputeService) InitiateDispute(ctx context.Context, req InitiateDisputeRequest) (*InitiateDisputeResponse, error) {
+	if s.finance != nil {
+		deadline := time.Now().Add(time.Duration(s.defaultSLAMins) * time.Minute)
+		d := &model.OrderDispute{OrderID: req.OrderID, InitiatorID: req.InitiatorID, InitiatorType: req.InitiatorType, Type: req.Type, Reason: req.Reason, EvidenceText: req.EvidenceText, EvidenceURLs: req.EvidenceURLs, SLADeadline: &deadline, TraceID: uuid.New().String()}
+		if err := s.finance.OpenDispute(ctx, d); err != nil {
+			return nil, err
+		}
+		return &InitiateDisputeResponse{DisputeID: d.ID, TraceID: d.TraceID, SLADeadline: d.SLADeadline}, nil
+	}
 	// Validate request
 	if req.OrderID == 0 || req.InitiatorID == 0 {
 		return nil, ErrDisputeValidation
@@ -269,6 +279,9 @@ type ResolveDisputeRequest struct {
 
 // ResolveDispute resolves a dispute with a decision
 func (s *DisputeService) ResolveDispute(ctx context.Context, req ResolveDisputeRequest) error {
+	if s.finance != nil {
+		return s.finance.ResolveDispute(ctx, req.DisputeID, req.ActorUserID, req.Resolution, req.ResolveRemark)
+	}
 	// Validate request
 	if req.DisputeID == 0 {
 		return ErrDisputeValidation
@@ -743,6 +756,29 @@ type BatchCloseDisputesRequest struct {
 
 // BatchCloseDisputes closes multiple disputes with resolution
 func (s *DisputeService) BatchCloseDisputes(ctx context.Context, req BatchCloseDisputesRequest) (*BatchOperationResult, error) {
+	if s.finance != nil {
+		if len(req.DisputeIDs) == 0 || len(req.DisputeIDs) > 100 {
+			return nil, apierr.BadRequest("1-100 dispute IDs required")
+		}
+		r := &BatchOperationResult{}
+		seen := map[uint64]bool{}
+		for _, id := range req.DisputeIDs {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			e := s.finance.ResolveDispute(ctx, id, req.ActorUserID, req.Resolution, req.ResolveRemark)
+			if e != nil {
+				r.FailedCount++
+				r.Errors = append(r.Errors, BatchOperationError{DisputeID: id, Error: e.Error()})
+			} else {
+				r.SuccessCount++
+			}
+		}
+		r.Success = r.FailedCount == 0
+		r.Message = fmt.Sprintf("成功%d，失败%d", r.SuccessCount, r.FailedCount)
+		return r, nil
+	}
 	// Validate request
 	if len(req.DisputeIDs) == 0 {
 		return nil, ErrDisputeValidation
@@ -914,3 +950,5 @@ func canTransitionTo(from, to model.DisputeStatus) bool {
 	}
 	return false
 }
+
+func (s *DisputeService) SetFinance(f *finance.Service) { s.finance = f }

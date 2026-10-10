@@ -47,8 +47,8 @@ func (p *TencentProvider) sendRequest(ctx context.Context, phone, templateID str
 	}
 
 	// For development, just log the request
-	fmt.Printf("[Tencent SMS] Send: phone=%s, sign=%s, template=%s, params=%v\n",
-		phone, p.SignName, templateID, params)
+	fmt.Printf("[Tencent SMS] Send: phone=%s, sign=%s, template=%s\n",
+		maskPhone(phone), p.SignName, templateID)
 
 	// Tencent Cloud SMS API will be implemented for production
 	// Reference: https://cloud.tencent.com/document/product/382/43195

@@ -3,6 +3,7 @@ package resp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -13,6 +14,28 @@ import (
 	"gamelink/internal/service"
 	"gamelink/pkg/apierr"
 )
+
+func TestErrorWithFallbackPreservesPublicErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		code    int
+		message string
+	}{
+		{"gateway", fmt.Errorf("payment: %w", apierr.ServiceUnavailable("渠道未接入")), 503, "渠道未接入"},
+		{"balance", apierr.BadRequest("余额不足"), 400, "余额不足"},
+		{"internal", errors.New("private database details"), 500, "创建支付失败"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, w := setupTestContext()
+			ErrorWithFallback(c, tc.err, "创建支付失败")
+			var response model.SuccessResponse
+			assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+			assert.Equal(t, tc.code, w.Code)
+			assert.Equal(t, tc.message, response.Message)
+		})
+	}
+}
 
 func TestError_APIError(t *testing.T) {
 	c, w := setupTestContext()

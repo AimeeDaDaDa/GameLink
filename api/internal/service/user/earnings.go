@@ -10,6 +10,7 @@ import (
 	"gamelink/internal/repository"
 	repoiface "gamelink/internal/repository/interfaces"
 	withdrawrepo "gamelink/internal/repository/withdraw"
+	"gamelink/internal/service/finance"
 )
 
 var (
@@ -57,6 +58,7 @@ const (
 // 2. 收益趋势
 // 3. 提现管理
 type EarningsService struct {
+	finance   *finance.Service
 	players   repository.PlayerRepository
 	orders    repoiface.OrderQuery
 	withdraws withdrawrepo.WithdrawRepository
@@ -137,10 +139,13 @@ func (s *EarningsService) GetEarningsSummary(ctx context.Context, userID uint64)
 	playerIDPtr := &player.ID
 
 	// 今日收益
-	todayStart := time.Now().Truncate(24 * time.Hour)
+	todayStart := startOfDay(time.Now())
 	todayEnd := todayStart.Add(24 * time.Hour)
 	todayEarnings, err := s.calculateEarnings(ctx, playerIDPtr, &todayStart, &todayEnd)
 	if err != nil {
+		if s.finance != nil {
+			return nil, err
+		}
 		todayEarnings = 0
 	}
 
@@ -150,12 +155,18 @@ func (s *EarningsService) GetEarningsSummary(ctx context.Context, userID uint64)
 	monthEnd := monthStart.AddDate(0, 1, 0)
 	monthEarnings, err := s.calculateEarnings(ctx, playerIDPtr, &monthStart, &monthEnd)
 	if err != nil {
+		if s.finance != nil {
+			return nil, err
+		}
 		monthEarnings = 0
 	}
 
 	// 累计收益
 	totalEarnings, err := s.calculateEarnings(ctx, playerIDPtr, nil, nil)
 	if err != nil {
+		if s.finance != nil {
+			return nil, err
+		}
 		totalEarnings = 0
 	}
 
@@ -163,6 +174,9 @@ func (s *EarningsService) GetEarningsSummary(ctx context.Context, userID uint64)
 	var balance *withdrawrepo.PlayerBalance
 	if s.withdraws != nil {
 		balance, err = s.withdraws.GetPlayerBalance(ctx, player.ID)
+	}
+	if s.finance != nil && (s.withdraws == nil || err != nil) {
+		return nil, fmt.Errorf("failed to read account balance: %v", err)
 	}
 	if s.withdraws == nil || err != nil {
 		// 如果获取失败或withdraws为nil，使用计算值
@@ -209,7 +223,7 @@ func (s *EarningsService) GetEarningsTrend(ctx context.Context, userID uint64, d
 	// 计算每日收益
 	now := time.Now()
 	for i := days - 1; i >= 0; i-- {
-		date := now.AddDate(0, 0, -i).Truncate(24 * time.Hour)
+		date := startOfDay(now.AddDate(0, 0, -i))
 		dateEnd := date.Add(24 * time.Hour)
 
 		earnings, err := s.calculateEarnings(ctx, playerIDPtr, &date, &dateEnd)
@@ -243,6 +257,13 @@ func (s *EarningsService) GetEarningsTrend(ctx context.Context, userID uint64, d
 //   - 检查是否有待处理的提现
 //   - 检查余额是否足够
 func (s *EarningsService) RequestWithdraw(ctx context.Context, userID uint64, req WithdrawRequest) (*WithdrawResponse, error) {
+	if s.finance != nil {
+		w, err := s.finance.RequestWithdraw(ctx, userID, req.AmountCents, req.Method, req.AccountInfo)
+		if err != nil {
+			return nil, err
+		}
+		return &WithdrawResponse{WithdrawID: w.ID, Status: string(w.Status)}, nil
+	}
 	// 查找陪玩师
 	player, err := s.findPlayerByUserID(ctx, userID)
 	if err != nil {
@@ -371,6 +392,10 @@ func (s *EarningsService) GetWithdrawHistory(ctx context.Context, userID uint64,
 
 // calculateEarnings 计算收益
 func (s *EarningsService) calculateEarnings(ctx context.Context, playerID *uint64, dateFrom, dateTo *time.Time) (int64, error) {
+	if s.finance != nil {
+		income, _, err := s.finance.Income(ctx, *playerID, dateFrom, dateTo)
+		return income, err
+	}
 	// 查询已完成的订单
 	orders, _, err := s.orders.List(ctx, repoiface.OrderListOptions{
 		PlayerID: playerID,
@@ -394,6 +419,10 @@ func (s *EarningsService) calculateEarnings(ctx context.Context, playerID *uint6
 
 // countOrders 统计订单数
 func (s *EarningsService) countOrders(ctx context.Context, playerID *uint64, dateFrom, dateTo *time.Time) (int64, error) {
+	if s.finance != nil {
+		_, count, err := s.finance.Income(ctx, *playerID, dateFrom, dateTo)
+		return count, err
+	}
 	_, total, err := s.orders.List(ctx, repoiface.OrderListOptions{
 		PlayerID: playerID,
 		Statuses: []model.OrderStatus{model.OrderStatusCompleted},
@@ -411,6 +440,9 @@ func (s *EarningsService) countOrders(ctx context.Context, playerID *uint64, dat
 
 // findPlayerByUserID 根据用户ID查找陪玩师
 func (s *EarningsService) findPlayerByUserID(ctx context.Context, userID uint64) (*model.Player, error) {
+	if s.finance != nil {
+		return s.players.GetByUserID(ctx, userID)
+	}
 	players, _, err := s.players.ListPaged(ctx, 1, 100)
 	if err != nil {
 		return nil, err
@@ -444,7 +476,7 @@ func (s *EarningsService) hasPendingWithdraw(ctx context.Context, playerID uint6
 // calculateDailyWithdrawTotal 计算今日提现总额
 func (s *EarningsService) calculateDailyWithdrawTotal(ctx context.Context, playerID uint64) (int64, error) {
 	// 今日起始时间
-	todayStart := time.Now().Truncate(24 * time.Hour)
+	todayStart := startOfDay(time.Now())
 	todayEnd := todayStart.Add(24 * time.Hour)
 
 	// 查询今日所有非拒绝状态的提现记录
@@ -510,4 +542,11 @@ func formatCents(cents int64) string {
 // strPtr 字符串指针辅助函数
 func strPtr(s string) *string {
 	return &s
+}
+
+// SetFinance injects the transactional accounting service.
+func (s *EarningsService) SetFinance(f *finance.Service) { s.finance = f }
+
+func startOfDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }

@@ -20,7 +20,8 @@ type Wallet struct {
 	BalanceCents int64 `json:"balanceCents" gorm:"column:balance_cents;default:0"`
 	// 冻结金额，单位为分
 	// @Example 5000
-	FrozenCents int64 `json:"frozenCents" gorm:"column:frozen_cents;default:0"`
+	FrozenCents         int64 `json:"frozenCents" gorm:"column:frozen_cents;default:0"`
+	WithdrawFrozenCents int64 `json:"withdrawFrozenCents" gorm:"column:withdraw_frozen_cents;not null;default:0"`
 	// 乐观锁版本号，每次更新自增
 	// @Example 1
 	Version int64 `json:"version" gorm:"column:version;default:1;not null"`

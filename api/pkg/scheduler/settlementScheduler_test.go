@@ -167,7 +167,7 @@ func TestSettlementScheduler_CronSchedule(t *testing.T) {
 
 	entries := scheduler.Cron.Entries()
 
-	require.Len(t, entries, 1, "Should have exactly one cron job")
+	require.Len(t, entries, 2, "Should register monthly reporting and daily T+7 release")
 
 	// The cron expression "0 2 1 * *" means: at 02:00 on the 1st of every month
 	// We can't easily test the exact schedule without accessing internal cron fields,
@@ -184,7 +184,7 @@ func TestSettlementScheduler_MultipleStartStop(t *testing.T) {
 	scheduler.Start()
 	time.Sleep(50 * time.Millisecond)
 	entries1 := scheduler.Cron.Entries()
-	assert.Len(t, entries1, 1)
+	assert.Len(t, entries1, 2)
 
 	// Stop
 	scheduler.Stop()

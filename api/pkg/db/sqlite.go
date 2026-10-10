@@ -36,7 +36,7 @@ func openSQLite(cfg ConfigProvider, metrics MetricsProvider) (*gorm.DB, error) {
 		return nil, fmt.Errorf("启用 sqlite 外键失败: %w", err)
 	}
 
-	if err := autoMigrate(gormDB); err != nil {
+	if err := withSQLiteMigration(gormDB, autoMigrate); err != nil {
 		return nil, err
 	}
 
@@ -59,6 +59,22 @@ func openSQLite(cfg ConfigProvider, metrics MetricsProvider) (*gorm.DB, error) {
 	}
 
 	return gormDB, nil
+}
+
+// Table rebuilds require foreign keys to be disabled on the migration connection.
+// Foreign key enforcement is restored before this connection is returned to the pool.
+func withSQLiteMigration(db *gorm.DB, migrate func(*gorm.DB) error) error {
+	return db.Connection(func(conn *gorm.DB) (err error) {
+		if err = conn.Exec("PRAGMA foreign_keys = OFF").Error; err != nil {
+			return err
+		}
+		defer func() {
+			if restoreErr := conn.Exec("PRAGMA foreign_keys = ON").Error; err == nil {
+				err = restoreErr
+			}
+		}()
+		return migrate(conn)
+	})
 }
 
 func configureConnection(db *gorm.DB, maxOpen int) error {

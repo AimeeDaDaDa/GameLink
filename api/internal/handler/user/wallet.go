@@ -65,7 +65,7 @@ func rechargeHandler(c *gin.Context, svc *walletservice.WalletService) {
 			respondAPIError(c, apierr.BadRequest(err.Error()))
 			return
 		}
-		respondAPIError(c, apierr.InternalError("recharge failed").WithDetails(err.Error()))
+		respondServiceError(c, err, "recharge failed")
 		return
 	}
 	respondSuccess(c, "OK", resp)

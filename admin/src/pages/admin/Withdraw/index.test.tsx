@@ -19,10 +19,12 @@ import { renderWithProviders, resetAllMocks, flushPromises } from '@/testutils';
 const { mockApi, mockMessage, mockModal } = vi.hoisted(() => ({
   mockApi: {
     getWithdraws: vi.fn(),
+    getWithdrawStats: vi.fn(),
     getWithdraw: vi.fn(),
     approveWithdraw: vi.fn(),
     rejectWithdraw: vi.fn(),
     completeWithdraw: vi.fn(),
+    prepareSalary: vi.fn(),
   },
   mockMessage: {
     success: vi.fn(),
@@ -93,6 +95,12 @@ describe('WithdrawPage', () => {
     mockModal.confirm.mockClear();
     localStorage.setItem('token', 'test-token');
     localStorage.setItem('user_role', 'admin');
+    mockApi.getWithdrawStats.mockResolvedValue({
+      data: {
+        success: true,
+        data: { pending: 4, approved: 4, completed: 6, monthlyVerifiedAmountCents: 12345 },
+      },
+    });
     // Set default mock return values
     mockApi.getWithdraws.mockResolvedValue({
       data: {
@@ -328,6 +336,22 @@ describe('WithdrawPage', () => {
   });
 
   describe('Action Buttons', () => {
+    it('does not register a payout without an actual transfer receipt', async () => {
+      const user = userEvent.setup();
+      mockApi.getWithdraws.mockResolvedValue({
+        data: {
+          success: true,
+          data: { withdraws: [createMockWithdraw({ status: 'approved' })], total: 1 },
+        },
+      });
+      renderWithProviders(<WithdrawPage />);
+      await user.click(await screen.findByText('完成打款'));
+      await user.click(await screen.findByText('确认登记'));
+      expect(await screen.findByText('请填写实际转账流水号')).toBeInTheDocument();
+      expect(mockApi.prepareSalary).not.toHaveBeenCalled();
+      expect(mockApi.completeWithdraw).not.toHaveBeenCalled();
+    });
+
     it('should show approve and reject buttons for pending withdraws', async () => {
       mockApi.getWithdraws.mockResolvedValue({
         data: {
@@ -427,11 +451,11 @@ describe('WithdrawPage', () => {
       });
     });
 
-    it('should display batch complete button', async () => {
+    it('requires individual receipts instead of offering batch completion', async () => {
       renderWithProviders(<WithdrawPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('批量完成打款')).toBeInTheDocument();
+        expect(screen.queryByText('批量完成打款')).not.toBeInTheDocument();
       });
     });
 

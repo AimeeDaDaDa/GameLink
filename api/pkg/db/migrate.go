@@ -136,7 +136,8 @@ func autoMigrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&model.PlayerGame{},
 		&model.PlayerSkillTag{},
-		&model.Wallet{}, // 用户钱包
+		&model.Wallet{},       // 用户钱包
+		&model.WalletLedger{}, // 不可变资金流水
 		&model.Review{},
 		&model.ReviewReport{},
 		&model.ReviewDisplaySettings{}, // 评价展示设置
@@ -193,6 +194,12 @@ func autoMigrate(db *gorm.DB) error {
 		&model.CommissionRule{},
 		&model.CommissionRecord{},
 		&model.MonthlySettlement{},
+		// Order entry (客服录单) models
+		&model.OrderEntry{},
+		&model.OrderFinancialSnapshot{},
+		&model.OrderParticipant{},
+		&model.OrderAllocation{},
+		&model.IdempotencyRecord{},
 		// Ranking models
 		&model.PlayerRanking{},
 		&model.RankingCommissionConfig{},
@@ -253,6 +260,13 @@ func autoMigrate(db *gorm.DB) error {
 
 // MigrateUserManagement 迁移用户管理相关数据表
 func MigrateUserManagement(db *gorm.DB) error {
+	if db.Dialector.Name() == "sqlite" {
+		return withSQLiteMigration(db, migrateUserManagementTables)
+	}
+	return migrateUserManagementTables(db)
+}
+
+func migrateUserManagementTables(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&model.UserTag{},
 		&model.UserTagRelation{},

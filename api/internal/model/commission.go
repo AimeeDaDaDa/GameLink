@@ -43,7 +43,7 @@ func (CommissionRule) TableName() string {
 // CommissionRecord 抽成记录
 type CommissionRecord struct {
 	ID                uint64           `gorm:"primaryKey;autoIncrement" json:"id"`
-	OrderID           uint64           `gorm:"not null;index" json:"orderId"`
+	OrderID           uint64           `gorm:"not null;uniqueIndex" json:"orderId"`
 	PlayerID          uint64           `gorm:"not null;index" json:"playerId"`
 	TotalAmountCents  int64            `gorm:"not null" json:"totalAmountCents"`                                                          // 订单总金额
 	CommissionRate    int              `gorm:"not null" json:"commissionRate"`                                                            // 抽成比例

@@ -16,14 +16,14 @@ type AliyunProvider struct {
 func (p *AliyunProvider) SendCode(ctx context.Context, phone, code string) error {
 	// Aliyun SMS API will be implemented for production
 	// Reference: https://help.aliyun.com/document_detail/101414.html
-	fmt.Printf("[Aliyun SMS] SendCode: phone=%s, code=%s, sign=%s\n", phone, code, p.SignName)
+	fmt.Printf("[Aliyun SMS] SendCode: phone=%s, sign=%s\n", maskPhone(phone), p.SignName)
 	return nil
 }
 
 // SendNotification sends templated notification via Aliyun SMS
 func (p *AliyunProvider) SendNotification(ctx context.Context, phone, templateID string, params map[string]string) error {
 	// Aliyun SMS API will be implemented for production
-	fmt.Printf("[Aliyun SMS] SendNotification: phone=%s, template=%s, params=%v, sign=%s\n",
-		phone, templateID, params, p.SignName)
+	fmt.Printf("[Aliyun SMS] SendNotification: phone=%s, template=%s, sign=%s\n",
+		maskPhone(phone), templateID, p.SignName)
 	return nil
 }

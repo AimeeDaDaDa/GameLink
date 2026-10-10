@@ -60,7 +60,7 @@ func createPaymentHandler(c *gin.Context, svc *paymentservice.PaymentService) {
 			respondAPIError(c, apierr.BadRequest(err.Error()))
 			return
 		}
-		respondAPIError(c, apierr.InternalError("创建支付失败").WithDetails(err.Error()))
+		respondServiceError(c, err, "创建支付失败")
 		return
 	}
 
@@ -81,7 +81,12 @@ func getPaymentStatusHandler(c *gin.Context, svc *paymentservice.PaymentService)
 		return
 	}
 
-	resp, err := svc.GetPaymentStatus(c.Request.Context(), paymentID)
+	p, err := svc.GetPaymentForUser(c.Request.Context(), getUserIDFromContext(c), paymentID)
+	if err != nil {
+		respondAPIError(c, err)
+		return
+	}
+	resp, err := svc.GetPaymentStatus(c.Request.Context(), p.ID)
 	if err != nil {
 		if err == paymentservice.ErrNotFound {
 			respondAPIError(c, apierr.NotFound(err.Error()))

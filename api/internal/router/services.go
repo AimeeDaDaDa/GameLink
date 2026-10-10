@@ -41,6 +41,7 @@ import (
 	contentservice "gamelink/internal/service/content"
 	contentcategoryservice "gamelink/internal/service/contentcategory"
 	couponservice "gamelink/internal/service/coupon"
+	"gamelink/internal/service/finance"
 	gamerankservice "gamelink/internal/service/gamerank"
 	giftservice "gamelink/internal/service/gift"
 	itemservice "gamelink/internal/service/item"
@@ -162,6 +163,7 @@ func initServices(orm *gorm.DB, cacheClient cache.Cache) *appServices {
 	notificationRepo := contentrepo.NewNotificationRepository(orm)
 	walletRepo := userrepo.NewWalletRepository(orm)
 
+	financial := finance.New(orm)
 	// 领域服务
 	commissionSvc := commissionservice.NewCommissionService(commissionRepo, orderRepo, playerRepo)
 	serviceItemSvc := itemservice.NewServiceItemService(serviceItemRepo, gameRepo, playerRepo)
@@ -289,6 +291,17 @@ func initServices(orm *gorm.DB, cacheClient cache.Cache) *appServices {
 	// Inject wallet repository for refund operations
 	withdrawRoutingSvc.SetWalletRepository(walletRepo)
 
+	commissionSvc.SetFinance(financial)
+	orderSvc.SetFinance(financial)
+	disputeSvc.SetFinance(financial)
+	paymentSvc.SetFinance(financial)
+	paymentSvc.SetWalletRepository(walletRepo)
+	paymentSvc.SetDistributedLock(distributedLock)
+	earningsSvc.SetFinance(financial)
+	walletSvc.SetFinance(financial)
+	giftSvc.SetFinance(financial)
+	rechargeSvc.SetFinance(financial)
+	withdrawRoutingSvc.SetFinance(financial)
 	return &appServices{
 		commissionSvc:       commissionSvc,
 		serviceItemSvc:      serviceItemSvc,

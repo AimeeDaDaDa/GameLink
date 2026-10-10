@@ -310,9 +310,11 @@ func (h *OrderHandler) RefundOrder(c *gin.Context) {
 		return
 	}
 	order, err := h.svc.RefundOrder(c.Request.Context(), id, adminservice.RefundOrderInput{
-		Reason:      payload.Reason,
-		AmountCents: payload.AmountCents,
-		Note:        payload.Note,
+		ExternalReceipt: payload.ExternalReceipt,
+		RequestID:       payload.RequestID,
+		Reason:          payload.Reason,
+		AmountCents:     payload.AmountCents,
+		Note:            payload.Note,
 	})
 	if err != nil {
 		if apierr.IsValidationError(err) {
@@ -973,17 +975,6 @@ func (h *PaymentHandler) RefundPayment(c *gin.Context) {
 		return
 	}
 
-	// Validate refund amount using model validation
-	// Requirements: 9.1, 9.2, 9.3
-	if err := payment.ValidateRefundAmount(payload.AmountCents); err != nil {
-		if refundErr, ok := err.(*model.RefundValidationError); ok {
-			respondAPIError(c, apierr.BadRequest(refundErr.Message).WithDetails(refundErr.Code))
-			return
-		}
-		respondAPIError(c, apierr.BadRequest("invalid refund amount"))
-		return
-	}
-
 	// Get operator ID from context if available
 	var operatorID *uint64
 	if uid := c.GetUint64("user_id"); uid != 0 {
@@ -1010,6 +1001,8 @@ func (h *PaymentHandler) RefundPayment(c *gin.Context) {
 
 	// Use the existing UpdatePayment with proper status transition
 	input := adminservice.UpdatePaymentInput{
+		ExternalReceipt:     payload.ExternalReceipt,
+		RequestID:           payload.RequestID,
 		Status:              payment.Status,
 		ProviderTradeNo:     payment.ProviderTradeNo,
 		ProviderRaw:         payment.ProviderRaw,
@@ -1038,6 +1031,8 @@ func (h *PaymentHandler) RefundPayment(c *gin.Context) {
 // RefundPaymentPayload defines refund request fields.
 // Requirements: 2.1, 9.1, 9.2, 9.3
 type RefundPaymentPayload struct {
+	ExternalReceipt string          `json:"external_receipt" binding:"max=128"`
+	RequestID       string          `json:"request_id" binding:"max=128"`
 	AmountCents     int64           `json:"amount_cents" binding:"required,gt=0" example:"1000"`
 	Reason          string          `json:"reason" binding:"required" example:"Customer requested refund"`
 	Note            string          `json:"note,omitempty" example:"Internal note"`
@@ -1234,7 +1229,9 @@ type orderNotePayload struct {
 }
 
 type orderRefundPayload struct {
-	Reason      string `json:"reason" binding:"required"`
-	AmountCents *int64 `json:"amount_cents,omitempty"`
-	Note        string `json:"note"`
+	ExternalReceipt string `json:"external_receipt" binding:"max=128"`
+	RequestID       string `json:"request_id" binding:"max=128"`
+	Reason          string `json:"reason" binding:"required"`
+	AmountCents     *int64 `json:"amount_cents,omitempty"`
+	Note            string `json:"note"`
 }

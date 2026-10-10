@@ -9,12 +9,14 @@ import (
 	"gamelink/internal/repository"
 	"gamelink/internal/repository/interfaces"
 	walletrepo "gamelink/internal/repository/wallet"
+	"gamelink/internal/service/finance"
 )
 
 var ErrInvalidAmount = errors.New("invalid amount")
 
 // WalletService 提供钱包余额与充值能力
 type WalletService struct {
+	finance  *finance.Service
 	wallets  walletrepo.Repository
 	payments repository.PaymentRepository
 	orders   interfaces.OrderRepository
@@ -37,6 +39,9 @@ type RechargeResponse struct {
 
 // Recharge 创建充值订单并直接记为已支付，累加余额（简化版，无第三方回调）
 func (s *WalletService) Recharge(ctx context.Context, userID uint64, req RechargeRequest) (*RechargeResponse, error) {
+	if s.finance != nil {
+		return nil, finance.ErrGatewayUnavailable
+	}
 	if req.AmountCents <= 0 {
 		return nil, ErrInvalidAmount
 	}
@@ -98,3 +103,6 @@ func (s *WalletService) GetBalance(ctx context.Context, userID uint64) (*model.W
 	}
 	return w, nil
 }
+
+// SetFinance injects the transactional accounting service.
+func (s *WalletService) SetFinance(f *finance.Service) { s.finance = f }

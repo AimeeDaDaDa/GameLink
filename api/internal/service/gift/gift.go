@@ -9,6 +9,7 @@ import (
 	"gamelink/internal/repository"
 	commissionrepo "gamelink/internal/repository/commission"
 	repoiface "gamelink/internal/repository/interfaces"
+	"gamelink/internal/service/finance"
 	"gamelink/pkg/apierr"
 )
 
@@ -23,6 +24,7 @@ var (
 
 // GiftService 礼物服务(基于统一订单系统
 type GiftService struct {
+	finance     *finance.Service
 	items       repository.ServiceItemRepository
 	orders      repoiface.OrderRepository
 	players     repository.PlayerRepository
@@ -112,10 +114,12 @@ func (s *GiftService) SendGift(ctx context.Context, userID uint64, req SendGiftR
 	// Auto-complete payment for gift orders (simplified for current implementation)
 	// Future: Integrate with payment flow for real payment processing
 	// 礼物订单支付后立即送达
-	if err := s.deliverGift(ctx, order); err != nil {
-		return nil, err
-	}
+	if s.finance == nil {
+		if err := s.deliverGift(ctx, order); err != nil {
+			return nil, err
+		}
 
+	}
 	return &GiftOrderResponse{
 		OrderID:     order.ID,
 		OrderNo:     order.OrderNo,
@@ -290,3 +294,6 @@ type GiftStatsResponse struct {
 func generateOrderNo(prefix string) string {
 	return fmt.Sprintf("%s%d", prefix, time.Now().UnixNano())
 }
+
+// SetFinance injects the transactional accounting service.
+func (s *GiftService) SetFinance(f *finance.Service) { s.finance = f }

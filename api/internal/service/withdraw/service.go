@@ -11,6 +11,7 @@ import (
 	"gamelink/internal/repository/settlementcompany"
 	"gamelink/internal/repository/user"
 	withdrawrepo "gamelink/internal/repository/withdraw"
+	"gamelink/internal/service/finance"
 	"gamelink/pkg/apierr"
 )
 
@@ -61,6 +62,7 @@ var (
 // WithdrawRoutingService 提现分流服务
 // Requirements: 13.1, 13.3, 13.4, 13.5
 type WithdrawRoutingService struct {
+	finance        *finance.Service
 	withdrawRepo   withdrawrepo.WithdrawRepository
 	settlementRepo settlementcompany.SettlementCompanyRepository
 	walletRepo     user.WalletRepository
@@ -80,6 +82,13 @@ func NewWithdrawRoutingService(
 // SetWalletRepository injects wallet repository for refund operations
 func (s *WithdrawRoutingService) SetWalletRepository(walletRepo user.WalletRepository) {
 	s.walletRepo = walletRepo
+}
+
+func (s *WithdrawRoutingService) GetFinancialStats(ctx context.Context) (*finance.WithdrawStats, error) {
+	if s.finance == nil {
+		return nil, apierr.ServiceUnavailable("事务账务服务未配置")
+	}
+	return s.finance.WithdrawStatistics(ctx)
 }
 
 // RouteWithdrawal 根据陪玩师所属公司确定提现处理主体
@@ -118,6 +127,9 @@ func (s *WithdrawRoutingService) RouteWithdrawal(ctx context.Context, withdraw *
 // ProcessWithdrawalRouting 处理提现分流并生成工资发放记录
 // Requirements: 13.3, 13.4, 13.5
 func (s *WithdrawRoutingService) ProcessWithdrawalRouting(ctx context.Context, withdrawID uint64, taxDeductedCents int64) (*model.SalaryPaymentRecord, error) {
+	if s.finance != nil {
+		return s.finance.PrepareSalary(ctx, withdrawID, taxDeductedCents)
+	}
 	// 获取提现记录
 	withdraw, err := s.withdrawRepo.Get(ctx, withdrawID)
 	if err != nil {
@@ -168,6 +180,16 @@ func (s *WithdrawRoutingService) ProcessWithdrawalRouting(ctx context.Context, w
 // CompleteWithdrawalPayment 完成提现付款
 // Requirements: 13.5
 func (s *WithdrawRoutingService) CompleteWithdrawalPayment(ctx context.Context, withdrawID uint64, bankTransactionNo string) error {
+	if s.finance != nil {
+		w, err := s.withdrawRepo.Get(ctx, withdrawID)
+		if err != nil {
+			return err
+		}
+		if w.ProcessedBy == nil {
+			return apierr.BadRequest("missing reviewer")
+		}
+		return s.finance.ChangeWithdrawal(ctx, withdrawID, *w.ProcessedBy, model.WithdrawStatusCompleted, "", bankTransactionNo)
+	}
 	withdraw, err := s.withdrawRepo.Get(ctx, withdrawID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -368,6 +390,9 @@ func (s *WithdrawRoutingStatsService) GetCompanyWithdrawalStats(ctx context.Cont
 // BatchApprove 批量批准提现申请
 // 只能处理 pending 状态的提现，更新为 approved 状态
 func (s *WithdrawRoutingService) BatchApprove(ctx context.Context, req *BatchApproveRequest, adminUserID uint64) (*BatchOperationResult, error) {
+	if s.finance != nil {
+		return s.changeBatch(ctx, req.WithdrawIDs, adminUserID, model.WithdrawStatusApproved, req.Remark)
+	}
 	result := &BatchOperationResult{
 		SuccessIDs:  make([]uint64, 0),
 		FailedItems: make([]BatchOperationErrorItem, 0),
@@ -438,6 +463,9 @@ func (s *WithdrawRoutingService) BatchApprove(ctx context.Context, req *BatchApp
 // 只能处理 pending 状态的提现，更新为 rejected 状态
 // 注意：拒绝后需要将金额退回用户钱包，需要注入 WalletRepository
 func (s *WithdrawRoutingService) BatchReject(ctx context.Context, req *BatchRejectRequest, adminUserID uint64) (*BatchOperationResult, error) {
+	if s.finance != nil {
+		return s.changeBatch(ctx, req.WithdrawIDs, adminUserID, model.WithdrawStatusRejected, req.Reason)
+	}
 	result := &BatchOperationResult{
 		SuccessIDs:  make([]uint64, 0),
 		FailedItems: make([]BatchOperationErrorItem, 0),
@@ -522,6 +550,9 @@ func (s *WithdrawRoutingService) BatchReject(ctx context.Context, req *BatchReje
 // BatchComplete 批量完成提现
 // 只能处理 approved 状态的提现，更新为 completed 状态
 func (s *WithdrawRoutingService) BatchComplete(ctx context.Context, req *BatchCompleteRequest, adminUserID uint64) (*BatchOperationResult, error) {
+	if s.finance != nil {
+		return s.changeBatch(ctx, req.WithdrawIDs, adminUserID, model.WithdrawStatusCompleted, "")
+	}
 	result := &BatchOperationResult{
 		SuccessIDs:  make([]uint64, 0),
 		FailedItems: make([]BatchOperationErrorItem, 0),
@@ -592,4 +623,36 @@ func (s *WithdrawRoutingService) BatchComplete(ctx context.Context, req *BatchCo
 	}
 
 	return result, nil
+}
+
+// SetFinance injects the transactional accounting service.
+func (s *WithdrawRoutingService) SetFinance(f *finance.Service) { s.finance = f }
+
+func (s *WithdrawRoutingService) ChangeWithdrawal(ctx context.Context, id, adminID uint64, target model.WithdrawStatus, remark, transactionNo string) error {
+	if s.finance == nil {
+		return apierr.ServiceUnavailable("transactional finance is not configured")
+	}
+	return s.finance.ChangeWithdrawal(ctx, id, adminID, target, remark, transactionNo)
+}
+func (s *WithdrawRoutingService) changeBatch(ctx context.Context, ids []uint64, adminID uint64, target model.WithdrawStatus, remark string) (*BatchOperationResult, error) {
+	if len(ids) == 0 || len(ids) > 100 {
+		return nil, apierr.BadRequest("1-100 withdrawal IDs required")
+	}
+	r := &BatchOperationResult{SuccessIDs: []uint64{}, FailedItems: []BatchOperationErrorItem{}}
+	seen := map[uint64]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		err := s.finance.ChangeWithdrawal(ctx, id, adminID, target, remark, "")
+		if err != nil {
+			r.FailedCount++
+			r.FailedItems = append(r.FailedItems, BatchOperationErrorItem{ID: id, Message: err.Error()})
+		} else {
+			r.SuccessCount++
+			r.SuccessIDs = append(r.SuccessIDs, id)
+		}
+	}
+	return r, nil
 }
